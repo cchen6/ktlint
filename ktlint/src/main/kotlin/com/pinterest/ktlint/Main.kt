@@ -21,6 +21,7 @@ import com.pinterest.ktlint.internal.lintFile
 import com.pinterest.ktlint.internal.location
 import com.pinterest.ktlint.internal.printHelpOrVersionUsage
 import com.pinterest.ktlint.reporter.plain.internal.Color
+import com.pinterest.ktlint.LineFormatter.LineFormatter
 import java.io.File
 import java.io.IOException
 import java.io.PrintStream
@@ -105,6 +106,9 @@ Examples:
   # 3rd-party reporter
   ktlint --reporter=csv,artifact=com.github.user:repo:master-SNAPSHOT
 
+  # auto-correct max line length violation
+  ktlint -L --length=100 "src/**/*.kt"
+
 Flags:""",
     synopsisHeading = "",
     customSynopsis = [""],
@@ -177,6 +181,18 @@ class KtlintCommandLine {
     private var reporters = ArrayList<String>()
 
     @Option(
+        names = ["--line", "-L"],
+        description = ["Fix max line length violation"]
+    )
+    private var line: Boolean = false
+
+    @Option(
+        names = ["--length"],
+        description = ["Maximum line lengt. Default is 100."]
+    )
+    private var length: Int = 100
+
+    @Option(
         names = ["--ruleset", "-R"],
         description = ["A path to a JAR file containing additional ruleset(s)"]
     )
@@ -217,6 +233,19 @@ class KtlintCommandLine {
         failOnOldRulesetProviderUsage()
 
         val start = System.currentTimeMillis()
+
+        if (line) {
+            patterns.fileSequence()
+                .takeWhile { errorNumber.get() < limit }
+                .map { file ->
+                    Callable {
+                        file to LineFormatter(file.path, length)
+                    }
+                }
+                .parallel({})
+
+            return
+        }
 
         val ruleSetProviders = loadRulesets(rulesets)
         val reporter = loadReporter()

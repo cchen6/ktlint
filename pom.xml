@@ -71,6 +71,7 @@
         <module>ktlint-reporter-plain</module>
         <module>ktlint-ruleset-experimental</module>
         <module>ktlint-ruleset-standard</module>
+        <module>ktlint-line-formatter</module>
         <module>ktlint-test</module>
     </modules>
 
