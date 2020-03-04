@@ -21,7 +21,6 @@ import com.pinterest.ktlint.internal.lintFile
 import com.pinterest.ktlint.internal.location
 import com.pinterest.ktlint.internal.printHelpOrVersionUsage
 import com.pinterest.ktlint.reporter.plain.internal.Color
-import com.pinterest.ktlint.LineFormatter.LineFormatter
 import java.io.File
 import java.io.IOException
 import java.io.PrintStream
@@ -181,16 +180,10 @@ class KtlintCommandLine {
     private var reporters = ArrayList<String>()
 
     @Option(
-        names = ["--line", "-L"],
-        description = ["Fix max line length violation"]
-    )
-    private var line: Boolean = false
-
-    @Option(
         names = ["--length"],
         description = ["Maximum line lengt. Default is 100."]
     )
-    private var length: Int = 100
+    private var lineLength: Int = 100
 
     @Option(
         names = ["--ruleset", "-R"],
@@ -233,24 +226,12 @@ class KtlintCommandLine {
         failOnOldRulesetProviderUsage()
 
         val start = System.currentTimeMillis()
-
-        if (line) {
-            patterns.fileSequence()
-                .takeWhile { errorNumber.get() < limit }
-                .map { file ->
-                    Callable {
-                        file to LineFormatter(file.path, length)
-                    }
-                }
-                .parallel({})
-
-            return
-        }
-
         val ruleSetProviders = loadRulesets(rulesets)
         val reporter = loadReporter()
         val userData = listOfNotNull(
             "android" to android.toString(),
+            "max_line_length" to lineLength.toString(),
+            "experimental_rules_set" to experimental.toString(),
             if (disabledRules.isNotBlank()) "disabled_rules" to disabledRules else null
         ).toMap()
 

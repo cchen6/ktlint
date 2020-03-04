@@ -9,6 +9,7 @@ class ExperimentalRuleSetProvider : RuleSetProvider {
         "experimental",
         AnnotationRule(),
         IndentationRule(),
+        MaxLineLengthRule(),
         MultiLineIfElseRule(),
         NoEmptyFirstLineInMethodBlockRule(),
         PackageNameRule(),
