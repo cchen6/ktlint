@@ -11,11 +11,9 @@ import com.pinterest.ktlint.core.ast.ElementType.COLON
 import com.pinterest.ktlint.core.ast.ElementType.COMMA
 import com.pinterest.ktlint.core.ast.ElementType.ELSE_KEYWORD
 import com.pinterest.ktlint.core.ast.ElementType.EQ
-import com.pinterest.ktlint.core.ast.ElementType.FIELD_IDENTIFIER
 import com.pinterest.ktlint.core.ast.ElementType.FOR_KEYWORD
 import com.pinterest.ktlint.core.ast.ElementType.FUN_KEYWORD
 import com.pinterest.ktlint.core.ast.ElementType.GT
-import com.pinterest.ktlint.core.ast.ElementType.IDENTIFIER
 import com.pinterest.ktlint.core.ast.ElementType.IF
 import com.pinterest.ktlint.core.ast.ElementType.IF_KEYWORD
 import com.pinterest.ktlint.core.ast.ElementType.LBRACE
@@ -35,19 +33,18 @@ import com.pinterest.ktlint.core.ast.nextLeaf
 import com.pinterest.ktlint.core.ast.prevLeaf
 import org.jetbrains.kotlin.com.intellij.lang.ASTNode
 import org.jetbrains.kotlin.com.intellij.psi.PsiComment
-import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.com.intellij.psi.PsiWhiteSpace
 import org.jetbrains.kotlin.com.intellij.psi.impl.source.tree.LeafElement
 import org.jetbrains.kotlin.com.intellij.psi.impl.source.tree.LeafPsiElement
 import org.jetbrains.kotlin.com.intellij.psi.impl.source.tree.PsiWhiteSpaceImpl
 import org.jetbrains.kotlin.com.intellij.psi.tree.IElementType
-import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
 
-class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLast {
+/* ktlint's rule that format line into multiple lines with each line length <= nmax line length */
+class MaxLineLengthRule : Rule("max-line-length-rule"), Rule.Modifier.RestrictToRootLast {
     private var maxLineLength = -1
     private var indentSize = -1
-    private var moreIndent = 0
-    private var numMoreIndent = 0
+    private var moreIndent = 0        // indent to be added to line before processing
+    private var numLinesAddIndent = 0 // number of lines to add indent before processing
     private var autoCorrectCalled = false
 
     override fun visit(
@@ -65,16 +62,16 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
 
         for (line in lines) {
             var ln = String(CharArray(moreIndent) { ' ' }) + line.substring(0, line.length)
-            if (numMoreIndent > 0) {
-                numMoreIndent -= 1
-                if (numMoreIndent == 0) moreIndent = 0
+            if (numLinesAddIndent > 0) {
+                numLinesAddIndent -= 1
+                if (numLinesAddIndent == 0) moreIndent = 0
             }
 
             var len = ln.length
             if (ln.length > maxLineLength) {
                 if (autoCorrect) {
                     emit(offset, "Exceeded max line length ($maxLineLength)", true)
-                    len = ParseLine(ln, offset, node)
+                    len = parseLine(ln, offset, node)
                 } else {
                     emit(offset, "Exceeded max line length ($maxLineLength)", !autoCorrectCalled)
                 }
@@ -86,63 +83,67 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         if (autoCorrect) autoCorrectCalled = true
     }
 
-    private fun ParseLine(ln: String, offset: Int, node: ASTNode) : Int {
-        var trimmed = 0
-        val elm = GetLastLeafInLine(node, offset + ln.length - 2)
-        if (elm.nextLeaf() == null) {
-            (elm as LeafPsiElement).insertTextAfterMe("\n")
+    /*
+    * parse and format line
+    * return: formatted line length
+    */
+    private fun parseLine(ln: String, offset: Int, node: ASTNode) : Int {
+        var tailWhiteSpaceLength = 0
+        val lastEl = getLastLeafInLine(node, offset + ln.length - 2)
+        if (lastEl.nextLeaf() == null) {
+            (lastEl as LeafPsiElement).insertTextAfterMe("\n")
         }
 
-        if (elm.elementType == WHITE_SPACE) {
-            trimmed = elm.textLength
-            (elm as LeafPsiElement).rawRemove()
+        if (lastEl.elementType == WHITE_SPACE) {
+            tailWhiteSpaceLength = lastEl.textLength
+            (lastEl as LeafPsiElement).rawRemove()   //trim tail white space
         }
 
-        val line = ln.substring(0, ln.length - trimmed)
+        val line = ln.substring(0, ln.length - tailWhiteSpaceLength)
         if (line.length <= maxLineLength) return line.length
 
-        var el = HasCommentAtEnd(line, offset, node)
-        if (el != null) return FormatComment(line, offset,el, node)
+        var el = hasCommentAtLineEnd(line, offset, node)
+        if (el != null) return formatComment(line, offset,el, node)
 
-        el = HasRBraceAtEnd(line, offset, node)
+        el = hasLBraceMatchRBraceAtEnd(line, offset, node)
         if (el != null) {
-            val len = FormatRBraceAtEnd(line, offset, el.startOffset - offset, node)
+            val len = formatRBraceAtEnd(line, offset, el.startOffset - offset, node)
             if (len > 0) return len
         }
 
-        el = HasKeyWordFromEnd(node, LBRACE, offset, line.length, line)
+        el = findLastKeyWord(node, LBRACE, offset, line.length, line)
         if (el != null) {
             val len = FormatLBrace(line, offset, el.startOffset - offset, node)
             if (len > 0) return len
         }
 
-        el = HasKeyWord(node, CLASS_KEYWORD, offset, 0, line)
-        if (el != null) el = IsClass(el)
-        if (el == null) el = HasKeyWord(node, FUN_KEYWORD, offset, 0, line)
+        el = hasKeyWord(node, CLASS_KEYWORD, offset, 0, line)
+        if (el != null) el = isClass(el)
+        if (el == null) el = hasKeyWord(node, FUN_KEYWORD, offset, 0, line)
         if (el != null) {
             val keyOffset =  el.startOffset - offset
-            return FormatParameters(line, offset, el.elementType, keyOffset, node)
+            return formatParameters(line, offset, el.elementType, keyOffset, node)
         }
 
-        el = HasKeyWord(node, IF_KEYWORD, offset, 0, line)
-        if (el == null) el = HasKeyWord(node, WHILE_KEYWORD, offset, 0, line)
+        el = hasKeyWord(node, IF_KEYWORD, offset, 0, line)
+        if (el == null) el = hasKeyWord(node, WHILE_KEYWORD, offset, 0, line)
         if (el != null) {
             val keyOffset =  el.startOffset - offset
-            val len = FormatControlFlow(line, offset, el.elementType, keyOffset, node)
+            val len = formatControlFlow(line, offset, el.elementType, keyOffset, node)
             if (len > 0) return len
         }
 
-        el = HasKeyWord(node, FOR_KEYWORD, offset, 0, line)
-        if (el != null) return FormatForLoop(line, offset, el.startOffset - offset, node)
+        el = hasKeyWord(node, FOR_KEYWORD, offset, 0, line)
+        if (el != null) return formatForLoop(line, offset, el.startOffset - offset, node)
 
-        el = HasKeyWord(node, EQ, offset, 0, line)
+        el = hasKeyWord(node, EQ, offset, 0, line)
         if (el != null) {
-            val len = FormatEQ(ln, offset, el.startOffset - offset, node)
+            val len = formatEQ(ln, offset, el.startOffset - offset, node)
             if (len > 0) return len
         }
 
-        val andEl = HasKeyWord(node, ElementType.ANDAND, offset, 0, line)
-        val orEl = HasKeyWord(node, ElementType.OROR, offset, 0, line)
+        val andEl = hasKeyWord(node, ElementType.ANDAND, offset, 0, line)
+        val orEl = hasKeyWord(node, ElementType.OROR, offset, 0, line)
         if (andEl != null || orEl != null) {
             if (andEl != null) {
                 if (orEl != null) {
@@ -153,45 +154,52 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
             } else {
                 el = orEl!!
             }
-            return  FormatControlFlow(line, offset, el.elementType, el.startOffset - offset, node)
+            return  formatControlFlow(line, offset, el.elementType, el.startOffset - offset, node)
         }
 
-        el = HasKeyWord(node, COMMA, offset, 0, line)
+        el = hasKeyWord(node, COMMA, offset, 0, line)
         if (el != null) {
             var len = FormatComma(ln, offset, el.startOffset - offset, node)
             if (len > 0) return len
         }
-        el = HasKeyWord(node, LPAR, offset, 0, line)
+        el = hasKeyWord(node, LPAR, offset, 0, line)
         if (el != null) {
-            var len = FormatLPAR(ln, offset, el.startOffset - offset, node)
+            var len = formatLPAR(ln, offset, el.startOffset - offset, node)
             if (len > 0) return len
         }
 
         return line.length
     }
 
-    private fun FormatComment(ln: String, offset: Int, el: ASTNode, node: ASTNode) : Int {
-        var endEl = GetLastLeafInLine(node, el.startOffset).nextLeaf()!!
+    /* move line end comment above the code line */
+    private fun formatComment(ln: String, offset: Int, el: ASTNode, node: ASTNode) : Int {
+        var endEl = getLastLeafInLine(node, el.startOffset).nextLeaf()!!
         var idx = ln.lastIndexOf(el.text)
         var firstEl = node.psi.findElementAt(offset)!!.node
-        var indentLen = IndentLength(ln, 0)
+        var indentLen = indentLength(ln, 0)
         if (el.startOffset - offset <= indentLen) return ln.length // whole line is comment
 
         var indent = String(CharArray(indentLen) { ' ' })
-        var newText = firstEl.text.substring(0, FirstNotMatchChar(firstEl.text, 0, '\n'))
+        var newText = firstEl.text.substring(0, firstNotMatchChar(firstEl.text, 0, '\n'))
         newText += "\n" + indent + el.text + '\n' + indent
 
         (el as LeafPsiElement).rawRemove()
-        ParseLine(ln.substring(0, idx), offset, node)
+        parseLine(ln.substring(0, idx), offset, node)
         (firstEl as LeafPsiElement).insertTextBeforeMe(newText)
 
         return endEl.startOffset - offset
     }
 
-    private fun FormatRBraceAtEnd(ln: String, offset: Int, idx: Int, node: ASTNode) : Int {
-        var endEl = GetLastLeafInLine(node, offset + idx).nextLeaf()!!
+    /*
+    *  Format ... { ... } to
+    *  ... {
+    *      ...
+    *  }
+    */
+    private fun formatRBraceAtEnd(ln: String, offset: Int, idx: Int, node: ASTNode) : Int {
+        var endEl = getLastLeafInLine(node, offset + idx).nextLeaf()!!
         var rBraceIdx = ln.lastIndexOf('}')
-        var indent = String(CharArray(IndentLength(ln, 0)) { ' ' })
+        var indent = String(CharArray(indentLength(ln, 0)) { ' ' })
         var nextEl = node.psi.findElementAt(offset + rBraceIdx + 1)!!.node
         while (nextEl.elementType != RBRACE) nextEl = nextEl.prevLeaf()
 
@@ -204,11 +212,17 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         return endEl.startOffset - offset
     }
 
+
+   /*
+   *  Format ... { ... -> ...
+   *  ... { ... ->
+   *      ...
+   */
     private fun FormatLBrace(ln: String, offset: Int, keyOffset:Int, node: ASTNode) : Int {
-        var endEl = GetLastLeafInLine(node, offset + keyOffset).nextLeaf()!!
-        var indentLen = IndentLength(ln, 0)
+        var endEl = getLastLeafInLine(node, offset + keyOffset).nextLeaf()!!
+        var indentLen = indentLength(ln, 0)
         var el = node.psi.findElementAt(offset + keyOffset)!!.node.nextLeaf()!!
-        var arrowEl = HasKeyWord(node, ARROW, offset, el.startOffset - offset, ln)
+        var arrowEl = hasKeyWord(node, ARROW, offset, el.startOffset - offset, ln)
         if (arrowEl != null) el = arrowEl.nextLeaf()!!
         if (el.startOffset == endEl.startOffset ||
             el.nextLeaf()!!.startOffset == endEl.startOffset
@@ -218,10 +232,10 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
 
         var rOffset = el.startOffset
         var indent = String(CharArray(indentLen + indentSize) { ' ' })
-        var rbEl = HasKeyWord(node, RBRACE, offset, rOffset - offset, ln)
+        var rbEl = hasKeyWord(node, RBRACE, offset, rOffset - offset, ln)
 
         if (rbEl != null) {
-            var lpEl = HasKeyWordFromEnd(node, LBRACE, offset, rbEl.startOffset - offset, null)
+            var lpEl = findLastKeyWord(node, LBRACE, offset, rbEl.startOffset - offset, null)
             if (lpEl != null && lpEl.startOffset - offset <= keyOffset) {
                 var headIndent = String(CharArray(indentLen) { ' ' })
                 (rbEl as LeafPsiElement).insertTextBeforeMe("\n" + headIndent)
@@ -229,14 +243,14 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         }
 
         (el as LeafPsiElement).insertTextBeforeMe("\n" + indent)
-        ParseLine(node.text.substring(rOffset, endEl.startOffset), rOffset, node)
-        ParseLine(node.text.substring(offset, rOffset), offset, node)
+        parseLine(node.text.substring(rOffset, endEl.startOffset), rOffset, node)
+        parseLine(node.text.substring(offset, rOffset), offset, node)
 
         return endEl.startOffset - offset
     }
 
+    /* format each parameter as a line */
     private fun ParametersToLines(
-        node: ASTNode,
         startEl: ASTNode,
         endEl: ASTNode,
         keyWord: IElementType,
@@ -270,7 +284,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
                 GT -> ltNum -= 1
                 COMMA -> if (lParNum == 0) {
                     if (ltNum != 0) {
-                        if (HasKeyWord(startEl, IF, sEl.startOffset, 0, null) != null) ltNum = 0
+                        if (hasKeyWord(startEl, IF, sEl.startOffset, 0, null) != null) ltNum = 0
                     }
                     if (ltNum == 0) {
                         (sEl as LeafPsiElement).insertTextBeforeMe(sText)
@@ -305,15 +319,15 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         return offset
     }
 
-    private fun FormatParameters(
+    private fun formatParameters(
         ln: String,
         offset: Int,
         keyWord: IElementType,
         keyOffset: Int,
         node: ASTNode
     ) : Int {
-        var lastEl = GetLastLeafInLine(node, keyOffset + offset)
-        var indentLen = IndentLength(ln, 0)
+        var lastEl = getLastLeafInLine(node, keyOffset + offset)
+        var indentLen = indentLength(ln, 0)
         var startIdx = -1
         var colonIdx = -1
         if (keyWord != COMMA) {
@@ -328,9 +342,10 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         var startOffset = offset
         var endEl = lastEl.nextLeaf()!!
         if (startIdx > 0 && (colonIdx < 0 || startIdx < colonIdx)) {
-            var sEl = HasKeyWord(node, LPAR, offset, 0, null)!!
+            var sEl = hasKeyWord(node, LPAR, offset, 0, null)!!
             if (sEl.nextLeaf()!!.elementType != RPAR) {
-                startOffset = ParametersToLines(node, sEl, lastEl, keyWord, RPAR, indentLen, true)
+                // parameter list
+                startOffset = ParametersToLines(sEl, lastEl, keyWord, RPAR, indentLen, true)
             }
             newLine = false
         } else if (colonIdx > 0) {
@@ -350,7 +365,8 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
             } else {
                 sEl = node.psi.findElementAt(offset + keyOffset)!!.node.prevLeaf()!!
             }
-            startOffset = ParametersToLines(node, sEl, lastEl, keyWord, RPAR, indentLen, hasPar)
+            // for parameter list that is not inside PAR
+            startOffset = ParametersToLines(sEl, lastEl, keyWord, RPAR, indentLen, hasPar)
         }
 
         var startEl = node.psi.findElementAt(startOffset + 1)!!.node
@@ -361,13 +377,14 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         }
 
         if (startEl.elementType == COLON && startEl.nextLeaf() != null) {
-            ParametersToLines(node, startEl, lastEl, keyWord, LBRACE, indentLen, newLine)
+            // parent class list
+            ParametersToLines(startEl, lastEl, keyWord, LBRACE, indentLen, newLine)
         }
 
         return endEl.startOffset - offset
     }
 
-    private fun FormatControlFlow(
+    private fun formatControlFlow(
         ln: String,
         offset: Int,
         keyWord: IElementType,
@@ -381,7 +398,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         var lpEl: ASTNode? = null
         when (keyWord) {
             IF_KEYWORD, WHILE_KEYWORD, LPAR -> {
-                sEl = HasKeyWord(node, LPAR, sEl.startOffset, 0, null)!!.nextLeaf()
+                sEl = hasKeyWord(node, LPAR, sEl.startOffset, 0, null)!!.nextLeaf()
                 extraIndent = indentSize
                 if (keyWord == LPAR) newLine = true
             }
@@ -391,9 +408,9 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
             }
         }
         var startIdx = sEl.startOffset
-        var lastEl = GetLastLeafInLine(node, sEl.startOffset)
+        var lastEl = getLastLeafInLine(node, sEl.startOffset)
         var endEl = lastEl.nextLeaf()!!
-        var indentLen = IndentLength(ln, 0)
+        var indentLen = indentLength(ln, 0)
         var indent = String(CharArray(indentLen + extraIndent) { ' ' })
 
         if (keyWord == IF_KEYWORD) {
@@ -410,15 +427,15 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
                         var sOffset = preEl.startOffset
                         (preEl as LeafPsiElement).insertTextBeforeMe("\n" + indent)
 
-                        FormatCtrlNewLine(sOffset, IF_KEYWORD, sOffset, endEl.startOffset, node)
-                        ParseLine(node.text.substring(offset, splitOffset), offset, node)
+                        formatCtrlNewLine(sOffset, IF_KEYWORD, sOffset, endEl.startOffset, node)
+                        parseLine(node.text.substring(offset, splitOffset), offset, node)
 
                         return endEl.startOffset - offset
                     }
                 }
             }
 
-            var el = HasKeyWord(node, ELSE_KEYWORD, offset, keyOffset, ln)
+            var el = hasKeyWord(node, ELSE_KEYWORD, offset, keyOffset, ln)
             if (el != null && el.startOffset > keyOffset + offset) {
                 var rOffset = el.startOffset
                 var headIndent = String(CharArray(indentLen) { ' ' })
@@ -429,10 +446,10 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
                     (el as LeafPsiElement).insertTextBeforeMe("\n" + headIndent)
                     var text = node.text.substring(rOffset, endEl.startOffset)
                     var sOffset = nextEl.nextLeaf()!!.startOffset - rOffset
-                    FormatControlFlow(text, rOffset, keyWord, sOffset, node)
+                    formatControlFlow(text, rOffset, keyWord, sOffset, node)
 
                     text = node.text.substring(offset, rOffset)
-                    rOffset = FormatControlFlow(text, offset, keyWord, keyOffset, node)
+                    rOffset = formatControlFlow(text, offset, keyWord, keyOffset, node)
                     var elseEl = node.psi.findElementAt(offset + rOffset + 1)!!.node!!
                     (elseEl as LeafPsiElement).insertTextBeforeMe(" ")
 
@@ -440,7 +457,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
                 }
 
                 // if (...) ... else ...
-                if (HasKeyWord(node, RBRACE, nextEl.startOffset, 0, null) != null ) {
+                if (hasKeyWord(node, RBRACE, nextEl.startOffset, 0, null) != null ) {
                     return 0      // else  ... } should be handled already
                 }
 
@@ -449,7 +466,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
                 (nextEl as LeafPsiElement).insertTextBeforeMe("\n" + indent)
 
                 var sOffset = split.nextLeaf()!!.startOffset
-                var endOffset = InsertRBrace(node, offset, sOffset - offset, headIndent, lastEl)
+                var endOffset = insertRBrace(node, offset, sOffset - offset, headIndent, lastEl)
                 var text: String
                 if (endOffset > 0) {
                     text = node.text.substring(sOffset, endOffset)
@@ -457,10 +474,10 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
                     text = node.text.substring(sOffset, endEl.startOffset)
                 }
 
-                ParseLine(text, sOffset, node)
+                parseLine(text, sOffset, node)
 
                 text = node.text.substring(offset, rOffset)
-                FormatControlFlow(text, offset, keyWord, keyOffset, node)
+                formatControlFlow(text, offset, keyWord, keyOffset, node)
 
                 el = split
                 if (endOffset > 0) (split as LeafPsiElement).insertTextAfterMe(" {")
@@ -472,12 +489,12 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
             }
         }
 
-        var rbraceEl = HasRBraceAtEnd(ln, offset, node)
+        var rbraceEl = hasLBraceMatchRBraceAtEnd(ln, offset, node)
         if (rbraceEl != null) {
-            FormatRBraceAtEnd(ln, offset, rbraceEl.startOffset - offset, node)
+            formatRBraceAtEnd(ln, offset, rbraceEl.startOffset - offset, node)
         }
 
-        var rparEl = FindPairedBraces(sEl, LPAR, RPAR, lastEl)
+        var rparEl = findPairedBraces(sEl, LPAR, RPAR, lastEl)
         if (rparEl != null) {
             var headIndent = String(CharArray(indentLen) { ' ' })
             var nextEl = rparEl.nextLeaf()!!
@@ -488,7 +505,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
                     (rparEl.nextLeaf() as LeafPsiElement).insertTextBeforeMe("\n" + indent)
 
                     var sOffset = rparEl.nextLeaf()!!.startOffset
-                    var endOffset = InsertRBrace(node, offset, sOffset - offset, headIndent, lastEl)
+                    var endOffset = insertRBrace(node, offset, sOffset - offset, headIndent, lastEl)
                     var text: String
                     if (endOffset > 0) {
                         text = node.text.substring(sOffset, endOffset)
@@ -496,8 +513,8 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
                         text = node.text.substring(sOffset, endEl.startOffset)
                     }
 
-                    ParseLine(text, sOffset, node)
-                    ParseLine(node.text.substring(offset, sOffset), offset, node)
+                    parseLine(text, sOffset, node)
+                    parseLine(node.text.substring(offset, sOffset), offset, node)
 
                     if (endOffset > 0) (rparEl as LeafPsiElement).insertTextAfterMe(" {")
 
@@ -516,7 +533,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
             } else {
                 if (rparEl == lastEl) {
                     // ( .. && ...)
-                    lpEl = HasKeyWord(node, LPAR, offset, 0, null)
+                    lpEl = hasKeyWord(node, LPAR, offset, 0, null)
                     indent = String(CharArray(indentLen + indentSize) { ' ' })
                 } else if (nextEl.elementType != LBRACE) {
                     if (nextEl.elementType != ElementType.ANDAND &&
@@ -527,7 +544,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
                     }
                     else if (rparEl.startOffset - offset > keyOffset) {
                         // ( ... && .. ) && ...
-                        lpEl = HasKeyWord(node, LPAR, offset, 0, null)
+                        lpEl = hasKeyWord(node, LPAR, offset, 0, null)
                         if (lpEl != null && (lpEl.startOffset < rparEl.startOffset)) {
                             sEl = lpEl
                             if (rparEl.startOffset - offset > maxLineLength) {
@@ -560,11 +577,11 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
                 ElementType.ANDAND, ElementType.OROR -> {
                     if (lPar == 0) {
                         if (ltNum > 0) {
-                            if (HasKeyWord(sEl, IF, startIdx, 0, null) != null) ltNum = 0
+                            if (hasKeyWord(sEl, IF, startIdx, 0, null) != null) ltNum = 0
                         }
                         if (ltNum == 0) {
                             if (prevOffset > 0) {
-                                FormatCtrlNewLine(prevOffset, LPAR, prevIdx, startIdx, node)
+                                formatCtrlNewLine(prevOffset, LPAR, prevIdx, startIdx, node)
                             }
 
                             prevOffset = sEl.startOffset
@@ -600,17 +617,17 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
 
         if (prevOffset > 0) {
             if (endEl.startOffset > sOffset) {
-                FormatCtrlNewLine(sOffset, LPAR, sOffset, endEl.startOffset, node)
+                formatCtrlNewLine(sOffset, LPAR, sOffset, endEl.startOffset, node)
             }
-            FormatCtrlNewLine(startIdx, LPAR, startIdx, sOffset, node)
+            formatCtrlNewLine(startIdx, LPAR, startIdx, sOffset, node)
         } else {
-            FormatCtrlNewLine(prevIdx, LPAR, prevIdx, sOffset, node)
+            formatCtrlNewLine(prevIdx, LPAR, prevIdx, sOffset, node)
         }
 
         return endEl.startOffset - offset
     }
 
-    private fun FormatCtrlNewLine(
+    private fun formatCtrlNewLine(
         offset: Int,
         keyWord: IElementType,
         startIdx: Int,
@@ -620,12 +637,12 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         var len = endIdx - startIdx
         var newKeyWord = keyWord
         var text = node.text.substring(startIdx, endIdx)
-        var el = HasKeyWord(node, keyWord, offset, 0, null)
-        var rEl = HasKeyWord(node, RPAR, offset, 0, null)
+        var el = hasKeyWord(node, keyWord, offset, 0, null)
+        var rEl = hasKeyWord(node, RPAR, offset, 0, null)
 
         if (rEl != null && rEl.prevLeaf()!!.textContains('\n')) {
-            var andEl = HasKeyWord(node, ElementType.ANDAND, offset, 0, null)
-            var orEl = HasKeyWord(node, ElementType.OROR, offset, 0, null)
+            var andEl = hasKeyWord(node, ElementType.ANDAND, offset, 0, null)
+            var orEl = hasKeyWord(node, ElementType.OROR, offset, 0, null)
             if (andEl == null && orEl == null) {
                 if (el == null || len <= maxLineLength) return offset
             } else {
@@ -648,17 +665,18 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         }
 
         var keyOffset = if (newKeyWord == LPAR) 0 else el.startOffset - offset
-        return FormatControlFlow(text, offset, newKeyWord, keyOffset, node)
+        return formatControlFlow(text, offset, newKeyWord, keyOffset, node)
     }
 
-    private fun FormatForLoop(ln: String, offset: Int, keyOffset: Int, node: ASTNode) : Int {
-        var lastEl = GetLastLeafInLine(node, offset + keyOffset)
+    /* Put key word "in", "until", "downTo", "step" and corresponding expression into new linw */
+    private fun formatForLoop(ln: String, offset: Int, keyOffset: Int, node: ASTNode) : Int {
+        var lastEl = getLastLeafInLine(node, offset + keyOffset)
         var endEl = lastEl.nextLeaf()!!
-        var indentLen = IndentLength(ln, 0)
+        var indentLen = indentLength(ln, 0)
         var indent = String(CharArray(indentLen + indentSize) { ' ' })
         var el = node.psi.findElementAt(offset + keyOffset)!!.node
-        var sEl = HasKeyWord(node, LPAR, el.startOffset, 0, null)!!.nextLeaf()!!
-        var rparEl = FindPairedBraces(sEl, LPAR, RPAR, lastEl)
+        var sEl = hasKeyWord(node, LPAR, el.startOffset, 0, null)!!.nextLeaf()!!
+        var rparEl = findPairedBraces(sEl, LPAR, RPAR, lastEl)
         if (rparEl != null) {
             var headIndent = String(CharArray(indentLen) { ' ' })
             var nextEl = rparEl.nextLeaf()!!
@@ -668,7 +686,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
                 (rparEl.nextLeaf() as LeafPsiElement).insertTextBeforeMe("\n" + indent)
 
                 var sOffset = rparEl.nextLeaf()!!.startOffset
-                var endOffset = InsertRBrace(node, offset, sOffset - offset, headIndent, lastEl)
+                var endOffset = insertRBrace(node, offset, sOffset - offset, headIndent, lastEl)
                 var text: String
                 if (endOffset > 0) {
                     text = node.text.substring(sOffset, endOffset)
@@ -676,8 +694,8 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
                     text = node.text.substring(sOffset, endEl.startOffset)
                 }
 
-                ParseLine(text, sOffset, node)
-                ParseLine(node.text.substring(offset, sOffset), offset, node)
+                parseLine(text, sOffset, node)
+                parseLine(node.text.substring(offset, sOffset), offset, node)
 
                 if (endOffset > 0) (rparEl as LeafPsiElement).insertTextAfterMe(" {")
 
@@ -685,22 +703,22 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
             }
         }
         var sOffset = offset + keyOffset + 3
-        var stepEl = HasKeyWord(node, "step", sOffset)
+        var stepEl = hasKeyWord(node, "step", sOffset)
         if (stepEl != null) {
             (stepEl as LeafPsiElement).insertTextBeforeMe(" \n" + indent)
         }
 
-        var downToEl = HasKeyWord(node, "downTo", sOffset)
+        var downToEl = hasKeyWord(node, "downTo", sOffset)
         if (downToEl != null) {
             (downToEl as LeafPsiElement).insertTextBeforeMe(" \n" + indent)
         }
 
-        var untilEl = HasKeyWord(node, "until", sOffset)
+        var untilEl = hasKeyWord(node, "until", sOffset)
         if (untilEl != null) {
             (untilEl as LeafPsiElement).insertTextBeforeMe(" \n" + indent)
         }
 
-        var inEl = HasKeyWord(node, ElementType.IN_KEYWORD, offset, sOffset - offset, null)
+        var inEl = hasKeyWord(node, ElementType.IN_KEYWORD, offset, sOffset - offset, null)
         if (inEl != null) {
             (inEl as LeafPsiElement).insertTextBeforeMe(" \n" + indent)
         }
@@ -713,11 +731,11 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         return endEl.startOffset - offset
     }
 
-    private fun FormatEQ(ln: String, offset: Int, keyOffset: Int, node: ASTNode) : Int {
-        var endEl = GetLastLeafInLine(node, offset + keyOffset).nextLeaf()!!
-        var formatEQ = if (HasKeyWord(node, VAL_KEYWORD, offset, 0, ln) == null) false else true
+    private fun formatEQ(ln: String, offset: Int, keyOffset: Int, node: ASTNode) : Int {
+        var endEl = getLastLeafInLine(node, offset + keyOffset).nextLeaf()!!
+        var formatEQ = if (hasKeyWord(node, VAL_KEYWORD, offset, 0, ln) == null) false else true
         if (!formatEQ) {
-            if (HasKeyWord(node, VAR_KEYWORD, offset, 0, ln) != null) formatEQ = true
+            if (hasKeyWord(node, VAR_KEYWORD, offset, 0, ln) != null) formatEQ = true
         }
 
         if (!formatEQ) {
@@ -737,25 +755,28 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
             //handle cases: var a = ..., val a =  or a = ...
             var sEl = node.psi.findElementAt(offset + keyOffset)!!.node.nextLeaf()!!
             var rOffset = sEl.startOffset
-            var indentLen = IndentLength(ln, 0)
+            var indentLen = indentLength(ln, 0)
             var indent = String(CharArray(indentLen + indentSize) { ' ' })
             (sEl as LeafPsiElement).insertTextBeforeMe("\n" + indent)
 
-            ParseLine(node.text.substring(rOffset, endEl.startOffset), rOffset, node)
+            parseLine(node.text.substring(rOffset, endEl.startOffset), rOffset, node)
             var len = endEl.startOffset - offset
             var lastEl = endEl.prevLeaf()!!
             if (lastEl is PsiWhiteSpace) lastEl = lastEl.prevLeaf()!!
+
+            // For the case of a = ... {, all following lines before line with }
+            // need to add indent before processing
             if (lastEl.elementType == LPAR) {
-                var nextEndEl = GetLastLeafInLine(node, offset + len + 1).nextLeaf()!!
+                var nextEndEl = getLastLeafInLine(node, offset + len + 1).nextLeaf()!!
                 var nextEl = if (endEl is PsiWhiteSpace) endEl.nextLeaf() else endEl
                 var extraIndent = String(CharArray(indentSize) { ' ' })
                 (nextEl as LeafPsiElement).insertTextBeforeMe(extraIndent)
-                numMoreIndent = 1
+                numLinesAddIndent = 1
 
                 nextEl = if (nextEndEl is PsiWhiteSpace) nextEndEl.nextLeaf() else nextEndEl
                 if (nextEl!!.elementType == RPAR) {
                     (nextEl as LeafPsiElement).insertTextBeforeMe(extraIndent)
-                    numMoreIndent += 1
+                    numLinesAddIndent += 1
                 }
                 moreIndent = indentSize
             }
@@ -767,46 +788,50 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
     }
 
     private fun FormatComma(ln: String, offset: Int, keyOffset:Int, node: ASTNode) : Int {
-        var lastEl = GetLastLeafInLine(node, offset + keyOffset)
+        var lastEl = getLastLeafInLine(node, offset + keyOffset)
         var endEl = lastEl.nextLeaf()!!
         var el = node.psi.findElementAt(offset + keyOffset)!!.node.nextLeaf()!!
         if (el == endEl) return 0   // comma is at end of line
 
-        var lparEl = HasKeyWordFromEnd(node, LPAR, offset + keyOffset, 0, null)
+        var lparEl = findLastKeyWord(node, LPAR, offset + keyOffset, 0, null)
         if (lparEl != null && lparEl.startOffset < keyOffset + offset) {
-            var rparEl = FindPairedBraces(lparEl.nextLeaf()!!, LPAR, RPAR, lastEl)
+            var rparEl = findPairedBraces(lparEl.nextLeaf()!!, LPAR, RPAR, lastEl)
             if (rparEl != null && rparEl.startOffset > keyOffset + offset) {
-                return FormatParameters(ln, offset, COMMA, keyOffset, node)
+                return formatParameters(ln, offset, COMMA, keyOffset, node)
             }
         }
 
         var sOffset = el.startOffset
-        var indentLen = IndentLength(ln, 0)
+        var indentLen = indentLength(ln, 0)
         (el as LeafPsiElement).insertTextBeforeMe("\n" + String(CharArray(indentLen) { ' ' }))
 
         var text = node.text.substring(sOffset, endEl.startOffset)
-        ParseLine(text, sOffset - offset, node)
-
+        parseLine(text, sOffset - offset, node)
         return endEl.startOffset - offset
     }
 
-    private fun FormatLPAR(ln: String, offset: Int, keyOffset:Int, node: ASTNode) : Int {
-        var lastEl = GetLastLeafInLine(node, offset + keyOffset)
+    /*
+    * treat expression or passing parameters inside Par
+    * as parameter list to be formatted into new lines
+    */
+    private fun formatLPAR(ln: String, offset: Int, keyOffset:Int, node: ASTNode) : Int {
+        var lastEl = getLastLeafInLine(node, offset + keyOffset)
         var sEl = node.psi.findElementAt(offset + keyOffset)!!.node
-        var rparEl = FindPairedBraces(sEl.nextLeaf()!!, LPAR, RPAR, lastEl)
+        var rparEl = findPairedBraces(sEl.nextLeaf()!!, LPAR, RPAR, lastEl)
         if (rparEl != null && sEl.nextLeaf()!!.elementType != rparEl.elementType) {
-            return FormatParameters(ln, offset, LPAR, keyOffset, node)
+            return formatParameters(ln, offset, LPAR, keyOffset, node)
         }
 
         return 0
     }
 
-    private fun HasCommentAtEnd(ln: String, offset: Int, node: ASTNode): ASTNode? {
+    private fun hasCommentAtLineEnd(ln: String, offset: Int, node: ASTNode): ASTNode? {
         val el = node.psi.findElementAt(offset + ln.length - 1)!!.node
         return if (el is PsiComment) el else null
     }
 
-    private fun HasRBraceAtEnd(ln: String, offset: Int, node: ASTNode): ASTNode? {
+
+    private fun hasLBraceMatchRBraceAtEnd(ln: String, offset: Int, node: ASTNode): ASTNode? {
         val keys = setOf(LPAR, LBRACE, RPAR, CLOSING_QUOTE, OPEN_QUOTE)
         var el = node.psi.findElementAt(offset + ln.length)!!.node
         if (el.textContains('\n')) el = el.prevLeaf()!!
@@ -840,7 +865,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         return null
     }
 
-    private fun HasKeyWord(
+    private fun hasKeyWord(
         node: ASTNode,
         keyWord: IElementType,
         offset: Int,
@@ -857,30 +882,31 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
 
         val keys = setOf(CLASS_KEYWORD, IF_KEYWORD, WHILE_KEYWORD, FOR_KEYWORD, COMMA)
         if (keyWord != LPAR && keyWord in keys) {
-            var lastEl = GetLastLeafInLine(node, el.startOffset)
-            var lparEl = HasKeyWordFromEnd(node, LPAR, offset, el.startOffset - offset, null)
+            var lastEl = getLastLeafInLine(node, el.startOffset)
+            var lparEl = findLastKeyWord(node, LPAR, offset, el.startOffset - offset, null)
             while (lparEl != null) {
-                var rparEl = FindPairedBraces(lparEl.nextLeaf()!!, LPAR, RPAR, lastEl)
+                var rparEl = findPairedBraces(lparEl.nextLeaf()!!, LPAR, RPAR, lastEl)
                 if (rparEl == null ||
                     (lparEl.startOffset < el.startOffset && rparEl.startOffset > el.startOffset)
                 ) {
                     return null
                 }
 
-                lparEl = HasKeyWordFromEnd(node, LPAR, offset, lparEl.prevLeaf()!!.startOffset - offset, null)
+                lparEl = findLastKeyWord(node, LPAR, offset, lparEl.prevLeaf()!!.startOffset - offset, null)
             }
         }
 
         if (text != null) {
-            var str = text.substring(0, el.startOffset - offset)
-            var count = str.toCharArray().filter { it == '"' }.count()
-            if ((count and 1) == 1) return null
+            // if key word is inside the quote, return not found
+            var quoteSubString = text.substring(0, el.startOffset - offset)
+            var count = quoteSubString.toCharArray().filter { it == '"' }.count()
+            if ((count % 2) == 1) return null
         }
 
         return el
     }
 
-    private fun HasKeyWord(node: ASTNode, keyWord: String, offset: Int) : ASTNode? {
+    private fun hasKeyWord(node: ASTNode, keyWord: String, offset: Int) : ASTNode? {
         var el = node.psi.findElementAt(offset)!!.node
         while (el.text != keyWord && !el.textContains('\n')) {
             el = el.nextLeaf()
@@ -889,7 +915,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         return if (el.text == keyWord && !el.textContains('\n')) el else null
     }
 
-    private fun HasKeyWordFromEnd(
+    private fun findLastKeyWord(
         node: ASTNode,
         keyWord: IElementType,
         offset: Int,
@@ -905,15 +931,15 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         if (el == null || el.elementType != keyWord || el.textContains('\n')) return null
 
         if (text != null) {
-            var str = text.substring(el.startOffset - offset, text.length)
-            var count = str.toCharArray().filter { it == '"' }.count()
-            if ((count and 1) == 1) return null
+            var quoteSubString = text.substring(el.startOffset - offset, text.length)
+            var count = quoteSubString.toCharArray().filter { it == '"' }.count()
+            if ((count % 2) == 1) return null
         }
 
         return el
     }
 
-    private fun IsClass(el: ASTNode) : ASTNode? {
+    private fun isClass(el: ASTNode) : ASTNode? {
         var prevEl = el.prevLeaf()
         if (prevEl == null || prevEl.textContains('\n')) return el
 
@@ -923,7 +949,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         return if (prevEl.text in keys) el else null
     }
 
-    private fun FindPairedBraces(
+    private fun findPairedBraces(
         el: ASTNode,
         lToken: IElementType,
         rToken: IElementType,
@@ -944,11 +970,11 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         return if (sEl.elementType == rToken && lNum == 0) sEl else null
     }
 
-    private fun IndentLength(line: String, offset: Int) : Int {
-        return FirstNotMatchChar(line, offset, ' ')
+    private fun indentLength(line: String, offset: Int) : Int {
+        return firstNotMatchChar(line, offset, ' ')
     }
 
-    private fun FirstNotMatchChar(str: String, offset: Int, c: Char): Int {
+    private fun firstNotMatchChar(str: String, offset: Int, c: Char): Int {
         var idx = offset
         if (str[idx] == '\n') idx++
         while (str[idx] == c && idx < str.length) idx++
@@ -956,7 +982,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         return if (str[offset] == '\n') idx - 1 else idx
     }
 
-    private fun GetLastLeafInLine(node: ASTNode, offset: Int) : ASTNode {
+    private fun getLastLeafInLine(node: ASTNode, offset: Int) : ASTNode {
         var el = node.psi.findElementAt(offset)!!.node
         if (el.text[0] == '\n') return el.prevLeaf()!!
         while (el.nextLeaf() != null && node.text[el.nextLeaf()!!.startOffset] != '\n') {
@@ -966,7 +992,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         return el
     }
 
-    private fun InsertRBrace(
+    private fun insertRBrace(
         node: ASTNode,
         offset: Int,
         sOffset: Int,
@@ -974,12 +1000,12 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
         lastEl: ASTNode
     ) : Int {
         var endOffset: Int
-        var cEl = HasKeyWord(node, COMMA, offset, sOffset, null)
+        var cEl = hasKeyWord(node, COMMA, offset, sOffset, null)
         while (cEl != null) {
-            var lparEl = HasKeyWordFromEnd(node, LPAR, offset, cEl.startOffset - offset, null)
+            var lparEl = findLastKeyWord(node, LPAR, offset, cEl.startOffset - offset, null)
             if (lparEl == null) break
 
-            var rparEl = FindPairedBraces(lparEl.nextLeaf()!!, LPAR, RPAR, lastEl)
+            var rparEl = findPairedBraces(lparEl.nextLeaf()!!, LPAR, RPAR, lastEl)
             if (rparEl == null) return -1
 
             if (lparEl.startOffset > cEl.startOffset ||
@@ -989,7 +1015,7 @@ class MaxLineLengthRule : Rule("max-line-rule"), Rule.Modifier.RestrictToRootLas
                 break
             }
 
-            cEl = HasKeyWord(node, COMMA, offset, rparEl.startOffset - offset, null)
+            cEl = hasKeyWord(node, COMMA, offset, rparEl.startOffset - offset, null)
         }
 
         if (cEl == null) {

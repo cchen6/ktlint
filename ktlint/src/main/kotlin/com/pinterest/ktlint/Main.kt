@@ -106,7 +106,7 @@ Examples:
   ktlint --reporter=csv,artifact=com.github.user:repo:master-SNAPSHOT
 
   # auto-correct max line length violation
-  ktlint -L --length=100 "src/**/*.kt"
+  ktlint -F --experimental --length=100 "src/**/*.kt"
 
 Flags:""",
     synopsisHeading = "",
@@ -181,7 +181,7 @@ class KtlintCommandLine {
 
     @Option(
         names = ["--length"],
-        description = ["Maximum line lengt. Default is 100."]
+        description = ["Maximum line length. Default is 100."]
     )
     private var lineLength: Int = 100
 

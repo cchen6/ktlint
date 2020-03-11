@@ -12,7 +12,7 @@ class MaxLineLengthRuleTest {
     val userData = mapOf("max_line_length" to "100")
 
     @Test
-    fun testClassWithParameterList() {
+    fun classWithParameterList() {
         val unformattedFunction =
             "class MyLongClassHolder(src: Int, dst: Int) : MyLongHolder<MyFavouriteVeryLongClass>(), SomeOtherInterface { fun foo() { /*...*/ } }"
             .trimIndent()
@@ -38,7 +38,7 @@ class MaxLineLengthRuleTest {
     }
 
     @Test
-    fun testFunWithParameterList() {
+    fun funWithParameterList() {
         val unformattedFunction =
             "private fun userDataResolver(editorConfigPath: String?, debug: Boolean): (String?) -> Map<String, String> {" +
             "    val workDir = File(name).canonicalPath" +
@@ -63,7 +63,7 @@ class MaxLineLengthRuleTest {
     }
 
     @Test
-    fun testEQAndIfElse() {
+    fun eqAndIfElse() {
         val unformattedFunction =
             "var orgFile = if (inFileName.takeLast(2) == \"kt\") FileWriter(File(args[0].take(inFileName.length - 2) + \"org.kt\")) else FileWriter(File(inFileName))" +
             "".trimIndent()
@@ -87,7 +87,7 @@ class MaxLineLengthRuleTest {
     }
 
     @Test
-    fun testIfWithAndOrLists() {
+    fun ifWithAndOrLists() {
         val unformattedFunction =
             "fun foo() {\n" +
             "    if (!File(inFileName).exists() || !(argc > 3 && args[i++].toIntOrNull() > 0 && outFile != null)) {\n" +
@@ -116,7 +116,7 @@ class MaxLineLengthRuleTest {
     }
 
     @Test
-    fun testWithLineEndCommentAndLamda() {
+    fun withLineEndCommentAndLamda() {
         val unformattedFunction =
             "class foo() {\n" +
             "    override fun of(dir: Path) = generateSequence(locate(dir)) { seed -> locate(seed.parent.parent) } /* seed.parent == .editorconfig dir */\n" +
