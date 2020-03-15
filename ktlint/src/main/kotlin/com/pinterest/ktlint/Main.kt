@@ -105,6 +105,9 @@ Examples:
   # 3rd-party reporter
   ktlint --reporter=csv,artifact=com.github.user:repo:master-SNAPSHOT
 
+  # auto-correct max line length violation
+  ktlint -F --experimental --length=100 "src/**/*.kt"
+
 Flags:""",
     synopsisHeading = "",
     customSynopsis = [""],
@@ -177,6 +180,12 @@ class KtlintCommandLine {
     private var reporters = ArrayList<String>()
 
     @Option(
+        names = ["--length"],
+        description = ["Maximum line length. Default is 100."]
+    )
+    private var lineLength: Int = -1
+
+    @Option(
         names = ["--ruleset", "-R"],
         description = ["A path to a JAR file containing additional ruleset(s)"]
     )
@@ -217,11 +226,12 @@ class KtlintCommandLine {
         failOnOldRulesetProviderUsage()
 
         val start = System.currentTimeMillis()
-
         val ruleSetProviders = loadRulesets(rulesets)
         val reporter = loadReporter()
         val userData = listOfNotNull(
             "android" to android.toString(),
+            "max_line_length" to lineLength.toString(),
+            "experimental_rules_set" to experimental.toString(),
             if (disabledRules.isNotBlank()) "disabled_rules" to disabledRules else null
         ).toMap()
 

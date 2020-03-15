@@ -13,6 +13,7 @@ interface EditorConfig {
     val indentSize: Int
     val tabWidth: Int
     val maxLineLength: Int
+    val experimental: Boolean
     val insertFinalNewline: Boolean
     fun get(key: String): String?
 
@@ -27,12 +28,14 @@ interface EditorConfig {
             }
             val tabWidth = map["indent_size"]?.toIntOrNull()
             val maxLineLength = map["max_line_length"]?.toIntOrNull() ?: -1
+            val experimental = map["experimental_rules_set"]?.toBoolean() ?: false
             val insertFinalNewline = map["insert_final_newline"]?.toBoolean() ?: true
             return object : EditorConfig {
                 override val indentStyle = indentStyle
                 override val indentSize = indentSize
                 override val tabWidth = tabWidth ?: indentSize
                 override val maxLineLength = maxLineLength
+                override val experimental = experimental
                 override val insertFinalNewline = insertFinalNewline
                 override fun get(key: String): String? = map[key]
             }

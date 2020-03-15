@@ -26,6 +26,7 @@ class MaxLineLengthRule : Rule("max-line-length"), Rule.Modifier.Last {
     ) {
         if (node.isRoot()) {
             val editorConfig = node.getUserData(KtLint.EDITOR_CONFIG_USER_DATA_KEY)!!
+            if (editorConfig.experimental) return
             maxLineLength = editorConfig.maxLineLength
             if (maxLineLength <= 0) {
                 return
