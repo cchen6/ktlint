@@ -183,7 +183,7 @@ class KtlintCommandLine {
         names = ["--length"],
         description = ["Maximum line length. Default is 100."]
     )
-    private var lineLength: Int = 100
+    private var lineLength: Int = -1
 
     @Option(
         names = ["--ruleset", "-R"],
